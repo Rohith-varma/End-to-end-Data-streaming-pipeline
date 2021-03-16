@@ -60,17 +60,8 @@ object SparkStreaming extends App with Log {
   val kafkaStreamValues: DStream[String] = kafkaStream.map(_.value())
 
   kafkaStreamValues.foreachRDD(tripRdd => enrich(tripRdd))
-
-  def enrich(tripRdd: RDD[String]): Unit = {
-    import spark.implicits._
-    val tripDf = tripRdd.map(Trip(_))
-      .toDF("start_date", "start_station_code", "end_date", "end_station_code", "duration_sec", "is_member")
-      .withColumn("id2", monotonically_increasing_id())
-
-    val enrichedTripRdd = tripDf.join(enrichedStationInfoDf, col("id1") === col("id2"), "inner")
-      .drop("id1", "id2").rdd
-
-    //Schema registry configuration
+  
+  //Schema registry configuration
     //Create the Schema Registry Client
     val srClient = new CachedSchemaRegistryClient("http://172.16.129.58:8081", 3)
     //Get the details of the Subject
@@ -82,6 +73,15 @@ object SparkStreaming extends App with Log {
     //Converting schema to Struct Type
     val schemaStructType = SchemaConverters.toSqlType(avroSchema)
       .dataType.asInstanceOf[StructType]
+
+  def enrich(tripRdd: RDD[String]): Unit = {
+    import spark.implicits._
+    val tripDf = tripRdd.map(Trip(_))
+      .toDF("start_date", "start_station_code", "end_date", "end_station_code", "duration_sec", "is_member")
+      .withColumn("id2", monotonically_increasing_id())
+
+    val enrichedTripRdd = tripDf.join(enrichedStationInfoDf, col("id1") === col("id2"), "inner")
+      .drop("id1", "id2").rdd
 
     val enrichedTripDf = spark.createDataFrame(enrichedTripRdd, schemaStructType).as("enTripDf")
 
