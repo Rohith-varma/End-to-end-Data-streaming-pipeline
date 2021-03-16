@@ -19,8 +19,6 @@ object SparkStreaming extends App with Log {
     .master("local[*]").getOrCreate()
   val ssc = new StreamingContext(spark.sparkContext, Seconds(10))
 
-  val filepath = "hdfs://quickstart.cloudera:8020/user/winter2020/rohith/final_project/enriched_station_information/"
-
   //esInfo Schema
   val esInfoSchema = StructType(
     List(
@@ -34,6 +32,7 @@ object SparkStreaming extends App with Log {
       StructField("capacity", IntegerType, nullable = true)
     )
   )
+  val filepath = "hdfs://quickstart.cloudera:8020/user/winter2020/rohith/final_project/enriched_station_information/"
   val enrichedStationInfoDf: DataFrame = spark.read.format("csv").schema(esInfoSchema).csv(filepath)
     .withColumn("id1", monotonically_increasing_id())
 
@@ -53,40 +52,36 @@ object SparkStreaming extends App with Log {
       ssc,
       LocationStrategies.PreferConsistent,
       ConsumerStrategies.Subscribe[String, String](List(topic), kafkaConf)
-    )=
+    )
   }
 
   //extracting Values from Kafka Stream
   val kafkaStreamValues: DStream[String] = kafkaStream.map(_.value())
-
   kafkaStreamValues.foreachRDD(tripRdd => enrich(tripRdd))
-  
+
   //Schema registry configuration
-    //Create the Schema Registry Client
-    val srClient = new CachedSchemaRegistryClient("http://172.16.129.58:8081", 3)
-    //Get the details of the Subject
-    val metadata = srClient.getSchemaMetadata("winter2020_rohith_enriched_trip-value", 1)
-    //Retrieve the Id of the Schema registry subject
-    val avroSchemaId = metadata.getId
-    //Get the schema by Id
-    val avroSchema = srClient.getByID(avroSchemaId)
-    //Converting schema to Struct Type
-    val schemaStructType = SchemaConverters.toSqlType(avroSchema)
-      .dataType.asInstanceOf[StructType]
+  //Create the Schema Registry Client
+  val srClient = new CachedSchemaRegistryClient("http://172.16.129.58:8081", 3)
+  //Get the details of the Subject
+  val metadata = srClient.getSchemaMetadata("winter2020_rohith_enriched_trip-value", 1)
+  //Retrieve the Id of the Schema registry subject
+  val avroSchemaId = metadata.getId
+  //Get the schema by Id
+  val avroSchema = srClient.getByID(avroSchemaId)
+  //Converting schema to Struct Type
+  val schemaStructType = SchemaConverters.toSqlType(avroSchema)
+    .dataType.asInstanceOf[StructType]
 
   def enrich(tripRdd: RDD[String]): Unit = {
     import spark.implicits._
     val tripDf = tripRdd.map(Trip(_))
       .toDF("start_date", "start_station_code", "end_date", "end_station_code", "duration_sec", "is_member")
       .withColumn("id2", monotonically_increasing_id())
-
     val enrichedTripRdd = tripDf.join(enrichedStationInfoDf, col("id1") === col("id2"), "inner")
       .drop("id1", "id2").rdd
-
     val enrichedTripDf = spark.createDataFrame(enrichedTripRdd, schemaStructType).as("enTripDf")
-
     val streamingData = enrichedTripDf.select("enTripDf.*").map(row => row.mkString(",")).toDF("value")
-
+    
     streamingData
       .selectExpr("CAST(value AS STRING)")
       .write
